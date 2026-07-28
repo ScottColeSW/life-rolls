@@ -29,7 +29,7 @@ import asyncio
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .eventbus import Event, EventBus
-from .liars_dice import Bid
+from .liars_dice import WILD_FACE, Bid
 from .personas import Persona
 
 
@@ -71,7 +71,8 @@ class TournamentStatsWatcher:
         self.records: List[Dict[str, Any]] = []
 
     async def _handle(self, event: Event) -> None:
-        if event.kind in ("round_call", "round_execution", "player_eliminated", "tournament_winner"):
+        if event.kind in ("round_call", "round_spot_on", "round_execution", "player_eliminated",
+                          "player_gained_die", "tournament_winner"):
             self.records.append({"kind": event.kind, **event.data})
 
     async def run(self, queue: "asyncio.Queue[Event]") -> None:
@@ -101,6 +102,7 @@ class HighlightWatcher:
         self.personas = personas
         self.highlights: List[str] = []
         self._last_bid: Optional[Bid] = None
+        self._is_palafox_round: bool = False
 
     def _name(self, idx: Optional[int]) -> str:
         return self.personas[idx].archetype_name if idx is not None else "someone"
@@ -112,13 +114,51 @@ class HighlightWatcher:
     async def _handle(self, event: Event) -> None:
         if event.kind == "round_start":
             self._last_bid = None
+            self._is_palafox_round = bool(event.data.get("is_palafox"))
+            if self._is_palafox_round:
+                # Always surfaced regardless of the usual noise filtering --
+                # a Palafox round (someone down to their last die, no wild
+                # ones for anyone) is rare and changes how the whole round
+                # should be read, so the human needs to know before the
+                # forced opening bid even lands.
+                self._publish("PALAFOX ROUND -- a player is down to their last die. "
+                              "No wild ones for anyone this round.", level="climax")
         elif event.kind == "round_raise":
             bid: Bid = event.data["bid"]
             is_opening = self._last_bid is None
+            if event.data.get("is_palafox_open"):
+                # The forced Palafox opening -- not a choice the player
+                # made, so it doesn't get the routine "opens" phrasing;
+                # it's the round's headline moment, not routine framing.
+                self._publish(f"{self._name(event.data['player_index'])} has one die left and is "
+                              f"forced to open Palafox with exactly what it shows: {bid.quantity} "
+                              f"showing {bid.face}.", level="climax")
+                self._last_bid = bid
+                return
+            # An Ace-Switch crossing (onto or off of wild 1s) is always
+            # notable regardless of the raw quantity delta -- switching TO
+            # aces typically LOWERS the displayed quantity (it's an
+            # equally strong bid at roughly half the count), which would
+            # never clear the BIG_QUANTITY_JUMP check below even though
+            # it's exactly the kind of bold, unusual move worth surfacing.
+            # Gated on NOT being a Palafox round -- during Palafox, 1s
+            # aren't wild at all, so crossing onto/off face 1 is just an
+            # ordinary face change, not an Ace-Switch, and calling it one
+            # would be describing a rule that isn't in effect this round.
+            switches_to_ace = (not is_opening and not self._is_palafox_round
+                                and self._last_bid.face != WILD_FACE and bid.face == WILD_FACE)
+            switches_from_ace = (not is_opening and not self._is_palafox_round
+                                  and self._last_bid.face == WILD_FACE and bid.face != WILD_FACE)
             is_big_jump = (not is_opening) and (bid.quantity - self._last_bid.quantity >= self.BIG_QUANTITY_JUMP)
             if is_opening:
                 self._publish(f"{self._name(event.data['player_index'])} opens: at least "
                               f"{bid.quantity} showing {bid.face}.", level="notable")
+            elif switches_to_ace:
+                self._publish(f"{self._name(event.data['player_index'])} switches the bid onto Wild "
+                              f"Aces -- at least {bid.quantity} showing 1s.", level="notable")
+            elif switches_from_ace:
+                self._publish(f"{self._name(event.data['player_index'])} switches off Aces, back to "
+                              f"at least {bid.quantity} showing {bid.face}.", level="notable")
             elif is_big_jump:
                 self._publish(f"{self._name(event.data['player_index'])} jumps boldly to at least "
                               f"{bid.quantity} showing {bid.face}.", level="notable")
@@ -128,6 +168,22 @@ class HighlightWatcher:
             verdict = "held up" if event.data["bid_was_true"] else "was a bluff"
             self._publish(f"{caller} calls {claimant}'s bid -- it {verdict} "
                           f"(actual count {event.data['actual_count']}).", level="major")
+        elif event.kind == "round_spot_on":
+            claimant, caller = self._name(event.data["claimant_index"]), self._name(event.data["caller_index"])
+            bid: Bid = event.data["bid"]
+            # Spot On success moves a die BOTH ways in one shot (see
+            # liars_dice.py's run_round) -- the highlight text says so
+            # directly rather than relying on a separate player_gained_die
+            # highlight right after it, which would just repeat the same
+            # moment twice in the commentary.
+            if event.data["spot_on_correct"]:
+                self._publish(f"{caller} goes Spot On and calls it EXACTLY -- {bid.quantity} showing "
+                              f"{bid.face}, dead on. {claimant} is caught out, and {caller} wins a "
+                              f"die back for the precision.", level="climax")
+            else:
+                self._publish(f"{caller} tries a Spot On on {claimant}'s bid of {bid.quantity} showing "
+                              f"{bid.face} -- actual count was {event.data['actual_count']}, not exact. "
+                              f"{caller} pays for the miss.", level="major")
         elif event.kind == "round_execution":
             self._publish(f"{self._name(event.data['player_index'])} froze and was executed on the spot.",
                           level="major")

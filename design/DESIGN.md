@@ -6,9 +6,61 @@ earlier idea; a real, authentic multi-round Liar's Dice tournament —
 quantity+face bids, round-robin among 5+ seated players, elimination on a
 lost round, last one standing takes the whole pot — is the actual game.
 See "Liar's Dice tournament (implemented)" further down for the current
-mechanic. Renaming the repo folder, page titles, and file names to match
-is real cleanup still owed, deliberately not done yet so it doesn't
-happen mid-rebuild.
+mechanic. The repo folder, page titles, GitHub repo (ScottColeSW/life-rolls,
+public, `main` branch), and port env var are all renamed to match now.
+
+## Real-time streaming (implemented) — replaces precompute-then-replay
+
+`server.py`'s `/api/run-tournament-stream` + `web/index.html` fixed a real
+reported bug: "Start Tournament seems to hang." Root cause was the
+original design (server computes the ENTIRE tournament, including every
+live Ollama call across a dozen-plus rounds, before responding at all) --
+in live mode that's a genuinely multi-minute wait with zero feedback on
+screen. The fix is real streaming, not a faster replay: a "preflight"
+status line per real setup step (model assignment, etc.) before anything
+else, then every raw tournament event AS it happens via
+`run_tournament_on_bus` + `HighlightWatcher`, both flowing through one
+relay since the relay just subscribes to everything on the bus, including
+what `HighlightWatcher` publishes back onto it. The browser's `EventQueue`
+class decouples "how fast events arrive" (instant in scripted mode, paced
+by real latency in live mode) from "how fast they're displayed" (a floor
+pace either way, so scripted mode doesn't blur past and live mode never
+waits longer than the real call already took). A curtain-wipe reveals the
+fully-assembled table once the first round of setup completes, per
+Scott's ask for "pre-production info live... then screen wipe/curtain,
+and board assembly." Board state (billboard, active seat, dice) reacts to
+every raw event; the round-log ticker only ever shows `HighlightWatcher`'s
+curated output -- the same "board sees everything, host only narrates
+what's notable" split proven earlier now actually wired into the real UI,
+not just a demo script.
+
+Two real bugs found and fixed while building this, neither from guessing:
+
+- **A significant, previously-undiscovered game-logic bug**: `run_round`'s
+  loser calculation was backwards -- `loser_idx = claimant_idx if
+  bid_was_true else current_idx` silently rewarded bluffing and punished
+  honest calls in every tournament run before this fix (copied the shape
+  of `resolve_ladder.py`'s `winner_id = claimant_id if claim_was_true else
+  caller_id`, correct there since it computes the WINNER, without flipping
+  the branches for computing the LOSER instead). Caught while reasoning
+  through the new streaming client's event handling, not by accident --
+  verified with a targeted script checking 60 calls (9 true, 51 bluff)
+  against the logically-correct outcome, zero mismatches after the fix.
+- **The streamed `round_call` event didn't include `hands`** (only the
+  final `RoundResult` object did) -- the new client's reveal code assumed
+  it was there and threw `Cannot convert undefined or null to object`,
+  which silently killed the display loop with no console output visible
+  in this session's browser tooling (an uncaught rejection in a
+  fire-and-forget async call). Found by temporarily instrumenting
+  `handleStreamEvent` to log every event kind and catch/report exceptions
+  rather than guessing from symptoms. Fixed by adding `hands=snapshot` to
+  the `emit("round_call", ...)` call itself, verified via curl against
+  the raw stream before ever going back to the browser.
+
+Verified end to end in both modes after both fixes: scripted (134 events,
+zero errors, correct winner/elimination count) and live (14 real rounds,
+model assignments visible within 2 seconds of clicking, zero errors,
+correct winner).
 
 ## Liar's Dice tournament (implemented, replaces the old resolve ladder + split/steal)
 
@@ -17,9 +69,14 @@ happen mid-rebuild.
 both negotiator classes in `engine/negotiation.py`. Proven via
 `dice_demo.py` (`--seed N`, `--players N`, `--live`, `--force-timeout`).
 
-- Each of N seated players (5+) gets a hand of dice — `HAND_SIZE = 3`
-  (not the classic 5) deliberately, for pace: fewer dice per player means
-  faster rounds and less to track visually. Easy to raise later.
+- Each of N seated players (5+) gets a hand of dice — `HAND_SIZE = 5`,
+  the standard Liar's Dice rule. Was `3` (a deliberate pacing shortcut,
+  fewer dice per player meaning faster rounds and less to track visually)
+  until Scott cross-checked this engine against researched real rules and
+  asked to match the standard. A full tournament now needs a structural
+  minimum of `(players-1)*5` lost rounds before one winner remains,
+  meaningfully more than at 3, so a full run naturally takes longer —
+  accepted tradeoff, not an oversight.
 - **1s are wild** (standard Liar's Dice rule) — count toward any face bid.
 - Bids are real `(quantity, face)` pairs, round-robin turn order among
   however many players are still alive. A raise must strictly increase a
@@ -61,17 +118,242 @@ issue as the old ladder's reasons.
 
 **Web UI (implemented, v0):** `web/index.html` fully rebuilt for the
 tournament — trigonometric round-table seating (real distinct positions
-for N players, not just 2 fixed sides), real dice-face glyphs (⚀-⚅), a
-billboard tracking the live standing bid, turn highlighting, an honest
-dice reveal (actual hand values, not just the computed count) using
-`RoundResult.hands`, and elimination/winner visuals. `POST
-/api/run-tournament?players=N&live=0|1` on the server side. Currently
-precompute-then-replay (the server runs the whole tournament, including
-every live Ollama call, before responding; the browser replays the
-already-finished result at a tuned pace) — verified end to end via direct
-JS execution (bypassing click-coordinate flakiness in this session's
-browser tool), including real round-table geometry and a full elimination
-sequence with zero console errors.
+for N players, not just 2 fixed sides), a billboard tracking the live
+standing bid, turn highlighting, an honest dice reveal (actual hand
+values, not just the computed count) using `RoundResult.hands`, and
+elimination/winner visuals. Dice faces are real CSS-drawn pip patterns (a
+3x3 grid of `.pip` divs per `.die-face`), not Unicode glyphs (⚀-⚅) —
+switched after Scott reported the glyphs weren't legible ("I can't see
+either the table hand or the players hands. i need to see dice."), since
+Unicode die-face rendering isn't guaranteed across systems/fonts while a
+CSS pip grid always renders identically. Superseded the original
+precompute-then-replay transport with real NDJSON streaming — see
+"Real-time streaming" above.
+
+**Spot On (implemented):** the exact-match side bet researched and
+cross-checked by Scott against real Liar's Dice rules ("Calza"). A player
+can call `spot_on` instead of a plain `call` on the standing bid — if the
+real count across every hand matches the bid's quantity EXACTLY, the
+claimant is caught out (loses a die, same as a normal successful call)
+*and* the caller separately wins a previously-lost die back, capped at
+`HAND_SIZE`; a wrong Spot On (high or low) costs only the caller, same as
+a wrong plain call. Both branches live in `run_round`'s `spot_on` case in
+`engine/liars_dice.py`, with `RoundResult.gained_die_index` /
+`is_spot_on` / `spot_on_correct` carrying the extra state, and
+`run_tournament` applying the `min(HAND_SIZE, ...)` gain separately from
+the normal loser decrement.
+
+The first implementation only ever affected the caller (gain on success,
+loss on failure) — corrected before shipping once Scott supplied a
+worked example showing the claimant is *also* penalized on a successful
+Spot On ("Player 4 is penalized, and you get to reclaim a previously
+lost die"). `ScriptedNegotiator.dice_move` only considers Spot On when
+the expected count sits almost exactly on the bid (a tight gap, tighter
+than its plain-call tolerance) and there's an actual die to win back
+(`len(hand) < HAND_SIZE`); `OllamaNegotiator.dice_move`'s live prompt
+only offers SPOT_ON as a word option under that same gate. Verified via
+`verify_spot_on.py` (a successful call, two failed calls at different
+directions, and a tournament-level check that the `HAND_SIZE` gain cap
+actually engages), then confirmed live in the browser end to end — both
+a failed and a successful Spot On fired correctly with zero console
+errors, curated into Host commentary by `HighlightWatcher` (climax level
+on a hit, major on a miss) with a distinct gold reveal-flash and sound
+cue (`sfxSpotOnHit`/`sfxSpotOnMiss`) separate from a normal call's
+green/red.
+
+**Bidding Aces / Ace-Switch (implemented):** the house rule letting a
+raise cross onto or off of wild 1s using its own formulas instead of the
+plain quantity/face ordering, since a bid on 1s is worth roughly double
+an ordinary face (every 1 already counts toward any face bid) — also
+researched and cross-checked by Scott. Switching a bid ONTO aces only
+requires half (rounded up) of the standing quantity:
+`ceil(standing.quantity / 2)`. Switching a bid OFF of aces requires
+double the ace quantity plus one: `standing.quantity * 2 + 1`. Both
+formulas live in `_valid_raise` (the legality check every raise goes
+through, including a live model's) and `compute_ace_switch_raise` /
+`compute_new_face_raise` (the latter now branches on `standing.face ==
+WILD_FACE` for the off-aces case) in `engine/liars_dice.py`. This is the
+halve-when-switching-to-1s rule that `Bid.value()`'s docstring originally
+flagged as a deliberate first-version simplification, not a bug — now
+implemented for real.
+
+`ScriptedNegotiator.dice_move` only proposes an Ace-Switch when NOT
+already standing on aces and when this player's own wilds plus the
+expected wilds among every other die comfortably cover the halved
+quantity — otherwise it'd just be handing the table a bid that looks
+strong but isn't backed by anything, a worse bluff than an ordinary raise.
+`OllamaNegotiator.dice_move`'s live prompt offers `RAISE_ACE` as a word
+option under the same gate, still without ever asking the model to state
+or compute the actual number (`compute_ace_switch_raise` always does
+that, matching the project-wide "arithmetic never happens in the model"
+rule). `HighlightWatcher` treats crossing the ace boundary (either
+direction) as always notable regardless of the raw quantity delta — a
+switch onto aces typically *lowers* the displayed quantity, which would
+never clear the ordinary `BIG_QUANTITY_JUMP` bar even though it's exactly
+the kind of bold, unusual move worth surfacing.
+
+Verified via `verify_ace_switch.py` (both formulas' exact boundaries —
+one below the minimum is illegal, exactly at the minimum is legal — plus
+a `run_round`-level check that an illegal Ace-Switch bid gets executed on
+the spot rather than silently corrected, the same treatment as any other
+engine-side illegal-raise catch), then confirmed live in the browser:
+both switch directions fired and narrated correctly across a full
+tournament, including a Spot On call landing exactly on an ace bid,
+with zero console errors.
+
+**Palafox/Showdown (implemented):** the forced-exact last-die special
+round, researched and cross-checked by Scott alongside Spot On and
+Ace-Switch. When the round's opener is down to exactly one die
+(`PALAFOX_TRIGGER_DICE`), the whole round becomes special: 1s stop being
+wild for EVERYONE (not just the one-die player), and that player's
+opening bid is forced to their own die's true value — `Bid(quantity=1,
+face=<their actual roll>)` — bypassing their negotiator entirely, since
+there's no real decision to make (or bluff to attempt) with a single die.
+`run_round` decides this once, up front, from `dice_remaining` alone
+(before any hand is even rolled), and threads a `wild_active: bool`
+through every counting/validation function for the rest of that round:
+`_count_matching`, `_valid_raise`, `compute_new_face_raise`, and both
+negotiator classes' `dice_move`. `RoundResult.is_palafox` carries the flag
+through to the tournament loop and every event.
+
+Crossing the ace/non-ace boundary during a Palafox round is deliberately
+*not* run through the Ace-Switch halve/double-plus-one formulas — with
+wilds off, face 1 is just an ordinary (weak) face, so the plain ordinal
+comparison in `Bid.value()` already handles it correctly with no special
+case. `HighlightWatcher` tracks `_is_palafox_round` specifically so it
+doesn't mislabel an ordinary face-1 raise as an "Ace-Switch" during a
+no-wild round. The forced opening and the round-start itself both always
+surface as climax-level highlights regardless of the usual noise
+filtering — a Palafox round changes how the whole round should be read,
+so the human needs to know before the forced bid even lands, not just
+after the fact.
+
+Verified via `verify_palafox.py` (wild-bonus disabled correctly in
+`_count_matching`, no halving/doubling through the ace boundary in
+`_valid_raise` when `wild_active=False`, a `run_round`-level check that
+the forced opening bid exactly matches the one-die player's real roll
+without ever consulting their negotiator, and a contrast check that an
+ordinary round with a 5-die opener is never mistaken for Palafox), then
+confirmed live in the browser across a full tournament: the round-label
+itself flags "PALAFOX -- no wild ones," the forced opening and the
+no-wild resolution both narrated correctly, and the tournament finished
+cleanly with zero console errors.
+
+This closes out all three researched house rules (Spot On, Bidding Aces,
+Palafox) — the "a little at a time" sequencing Scott asked for is done.
+
+## Dice visibility: real values, not hidden "?" placeholders (implemented)
+
+Every hand used to stay hidden (`?` glyphs) until a round's reveal moment
+(a call, a Spot On, or an execution) — deliberately withholding the truth
+for suspense, mirroring what the AI players themselves can't see. Scott
+pushed back: "I'd rather we see them all the time; before, during, and
+after each roll. As the human I need to see the choices and bluffs more
+visually" — the suspense was actively working against the stated goal of
+this whole project (showing a human what these AI agents are actually
+doing), not for it.
+
+Fixed by moving the reveal earlier: `run_round` now sends every alive
+player's real hand (`hands={i: list(players[i].hand) ...}`) on the
+`round_start` event itself, the moment dice are rolled — not just at the
+end of a round. The client renders real pip-dice immediately on
+`round_start` (no `matchFace` yet, since there's no bid to compare
+against) and keeps them on screen through the whole round; the existing
+reveal events (`round_call`, `round_spot_on`) still re-render with
+`matchFace` set, to highlight which pips actually matched the bid. This
+let an entire layer of client bookkeeping disappear: `diceCounts` and
+`renderHiddenDice()` are gone completely -- the dice count for a seat is
+now just `hand.length` from whichever real hand was last sent, so there's
+nothing to keep in sync by hand anymore (the exact kind of duplicated
+state that already caused two separate bugs earlier in this project).
+`player_eliminated` now also explicitly clears the seat's dice row, so a
+dimmed-out eliminated player doesn't keep showing a stale "ghost" hand
+from the round that finished them off.
+
+## Tournament history / Standings page (implemented)
+
+Scott: "it would be great if we could have some stats on a page that
+will capture and show metrics and history of all runs (we did this in
+the Dominion project)." Mirrors Dominion's own `engine/history.py` +
+`web/stats.html` almost exactly, adapted to this game's own event
+vocabulary rather than shared code -- the two projects' event shapes
+have nothing in common beyond the general pub/sub pattern.
+
+`engine/history.py`: a SQLite schema (`tournaments`, `player_stats`) and
+`TournamentHistoryRecorder`, a plain synchronous object fed the exact
+`(kind, data)` stream `server.py` already relays to the browser --
+`recorder.on_event(event.kind, event.data)` sits right alongside the
+existing `sink(...)` call in `_run_streamed_tournament`'s relay loop, the
+same shape as Dominion's `recorder.on_event(ev)` next to its own
+`write_event`. No new async bus subscription needed -- this recorder
+isn't a `tournament_watchers.py`-style watcher, just a callback chained
+into the same relay everything else already flows through. `on_event`
+never raises (a storage hiccup should never be able to interrupt a live
+tournament over what's ultimately a nice-to-have), and one row per
+tournament plus one row per seated player gets written once
+`tournament_winner` lands. Aggregated by MODEL, not player index or
+archetype (both redrawn fresh every tournament) -- a scripted player's
+`model` is `None` and is excluded from the leaderboard entirely, the
+same convention Dominion's `get_stats()` uses.
+
+Tracks, per player per tournament: calls made/correct, Spot Ons
+attempted/correct, raises made, Ace-Switches made, dice lost/gained,
+executions, and which round they were eliminated in (if at all). The
+Ace-Switch detection is its own independent copy of the same
+face-crossing check `HighlightWatcher` already does for narration --
+duplicated on purpose rather than shared, matching this file's existing
+"the two watchers are independent by design" stance elsewhere in this
+doc.
+
+`web/stats.html`: a Standings page (linked from the main page's footer)
+showing a summary bar, a per-model leaderboard, per-model "player cards,"
+and a Recent Tournaments list -- the last one specifically because Scott
+asked for "history of all runs," not just an aggregate leaderboard, which
+is closer to what Dominion's own stats page shows.
+
+Verified by running one scripted and one live tournament concurrently
+through the actual server (not a mocked test) and confirming both landed
+in `/api/stats` with correct model attribution, round counts, and
+winners -- zero console errors on either the game page or the Standings
+page.
+
+## Roster panel + "thinking" indicator (implemented)
+
+Scott: "instead of a long string of our competitors at the top, can we
+have a player/model/online list badge on the side of the play board? We
+also did something like this in Dominion. I'd like to see a 'thinking'
+icon when the model is invoked for a turn." Two changes, same request:
+
+**Roster panel** (`#roster-panel` in `web/index.html`): replaces the old
+single run-on status line ("live: A -> modelX, B -> modelY, ...") with a
+proper per-seat row (name, model, an online/offline dot) in a panel
+beside `#table-wrap` inside a new `.board-row` flex wrapper. Backed by a
+new `server.py` endpoint, `get_model_roster()` / `GET /api/models` --
+cross-references `TEXT_MODELS` (the actual pool a live tournament draws
+from) against Ollama's own `/api/tags`, mirroring Dominion's
+`get_model_roster()` almost line for line. The client polls this every
+5 seconds regardless of whether a tournament is running, same reasoning
+as Dominion: whether Ollama is up/down or a model is installed can
+change while the page stays open.
+
+**Thinking indicator**: `run_round` now emits a `player_thinking` event
+immediately before calling `player.negotiator.dice_move(...)` for a
+turn (skipped entirely for a Palafox player's forced opening, since
+there's no negotiator call at all there to precede). Purely
+informational -- no effect on game logic. The client shows a small
+pulsing badge on that seat only when it has a live model assigned
+(`current.models[i]` truthy and `current.live`); a scripted negotiator
+resolves instantly, so the badge would flash for at most one frame
+either way, but gating it avoids needless flicker. Cleared via a shared
+`clearThinking()` helper alongside every definitive per-turn event
+(`round_raise`, `round_call`, `round_spot_on`, `round_execution`).
+
+Verified live: ran a real live tournament and confirmed the badge tracked
+the correct seat as each live model's actual Ollama round-trip was in
+flight, the roster panel showed accurate per-seat model assignments with
+live "online" dots (cross-checked against `/api/models` returning all
+five `TEXT_MODELS` installed and reachable), and zero console errors
+across the full run.
 
 ## Highlight/Host watchers (implemented) — the "board sees everything, Host only narrates what matters" split
 

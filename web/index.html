@@ -39,16 +39,81 @@
   #reveal-flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; z-index: 999; }
   #reveal-flash.true { background: var(--true); animation: flashFade 0.6s ease-out; }
   #reveal-flash.bluff { background: var(--bluff); animation: flashFade 0.6s ease-out; }
+  #reveal-flash.spoton-hit { background: var(--accent); animation: flashFade 0.8s ease-out; }
+  #reveal-flash.spoton-miss { background: var(--bluff); animation: flashFade 0.6s ease-out; }
   @keyframes flashFade { 0% { opacity: 0.3; } 100% { opacity: 0; } }
 
+  #console {
+    max-width: 640px;
+    margin: 0 auto 16px;
+    background: #05070a;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-family: "Courier New", monospace;
+    font-size: 0.82rem;
+    color: #7cfc9a;
+    min-height: 100px;
+    max-height: 220px;
+    overflow-y: auto;
+    display: none;
+  }
+  #console div { opacity: 0; animation: fadein 0.3s forwards; padding: 1px 0; }
+
+  .board-row {
+    display: flex; justify-content: center; align-items: flex-start;
+    gap: 16px; flex-wrap: wrap; max-width: 1040px; margin: 0 auto;
+  }
   #table-wrap {
     position: relative;
     width: 100%;
     max-width: 820px;
     height: 520px;
-    margin: 0 auto 16px;
+    margin: 0 0 16px;
     display: none;
+    overflow: hidden;
+    border-radius: 16px;
   }
+  /* Roster panel -- replaces the old single long "live: A -> modelX, B ->
+     modelY, ..." status string with a proper per-seat badge list beside
+     the board (Scott: "instead of a long string of our competitors at
+     the top, can we have a player/model/online list badge on the side of
+     the play board?"). Online status is polled from /api/models, cross-
+     referenced against the actual TEXT_MODELS pool via Ollama's own
+     /api/tags, same as the sibling Dominion project's roster panel. */
+  #roster-panel {
+    display: none;
+    width: 190px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+  }
+  #roster-panel.visible { display: block; }
+  .roster-title { color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.68rem; margin-bottom: 8px; }
+  .roster-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--panel-2); font-size: 0.78rem; }
+  .roster-row:last-child { border-bottom: none; }
+  .roster-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--dim); }
+  .roster-dot.online { background: var(--true); box-shadow: 0 0 6px var(--true); }
+  .roster-dot.offline { background: var(--bluff); }
+  .roster-info { flex: 1; min-width: 0; }
+  .roster-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .roster-model { color: var(--dim); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .curtain-panel {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 50%;
+    background: linear-gradient(180deg, #241a3a 0%, #0d0a1a 100%);
+    z-index: 50;
+    transition: transform 0.9s cubic-bezier(.7,0,.3,1);
+    box-shadow: 0 0 30px rgba(0,0,0,0.6);
+  }
+  .curtain-panel.left { left: 0; border-right: 2px solid var(--accent); }
+  .curtain-panel.right { right: 0; border-left: 2px solid var(--accent); }
+  .curtain-panel.left.open { transform: translateX(-100%); }
+  .curtain-panel.right.open { transform: translateX(100%); }
   #table-surface {
     position: absolute;
     left: 50%; top: 50%;
@@ -68,6 +133,12 @@
   }
   .billboard .round-label { display: block; font-size: 0.62rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
   .billboard .bid-value { display: block; font-size: 1rem; font-weight: 700; margin-top: 4px; }
+  .billboard.palafox { border-color: var(--bluff); animation: palafoxPulse 1.2s ease-in-out infinite; }
+  .billboard.palafox .round-label { color: var(--bluff); }
+  @keyframes palafoxPulse {
+    0%, 100% { box-shadow: 0 0 18px rgba(230,83,79,0.35) inset; }
+    50% { box-shadow: 0 0 30px rgba(230,83,79,0.7) inset; }
+  }
 
   .seat {
     position: absolute;
@@ -80,14 +151,49 @@
     text-align: center;
     transition: border-color 0.2s, box-shadow 0.2s, opacity 0.5s, filter 0.5s;
   }
-  .seat .avatar { font-size: 1.8rem; }
+  .seat .avatar { font-size: 1.8rem; position: relative; display: inline-block; }
+  /* "Thinking" indicator -- a small pulsing badge shown only while a live
+     model's real Ollama round-trip is actually in flight for this seat's
+     turn (see engine/liars_dice.py's player_thinking event). Scott: "I'd
+     like to see a 'thinking' icon when the model is invoked for a turn." */
+  .seat .thinking-badge { display: none; position: absolute; top: -6px; right: -14px; font-size: 1rem; }
+  .seat.thinking .thinking-badge { display: inline-block; animation: thinkPulse 1s ease-in-out infinite; }
+  @keyframes thinkPulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.15); } }
   .seat .name { font-weight: 700; font-size: 0.82rem; margin: 2px 0; }
   .seat .model-badge { display: inline-block; font-size: 0.6rem; padding: 1px 8px; border-radius: 999px; background: var(--panel-2); color: var(--dim); border: 1px solid var(--line); margin-bottom: 4px; }
   .seat .model-badge.live { color: var(--accent); border-color: var(--accent); background: rgba(242,181,60,0.12); }
-  .seat .dice-row { display: flex; justify-content: center; gap: 3px; flex-wrap: wrap; min-height: 1.6em; }
-  .seat .die { font-size: 1.3rem; line-height: 1; }
-  .seat .die.hidden { color: var(--dim); font-size: 1rem; }
-  .seat .die.match { color: var(--true); text-shadow: 0 0 8px rgba(52,199,123,0.8); }
+  .seat .dice-row { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; min-height: 38px; }
+  /* Real CSS-drawn dice -- a 3x3 grid of pips, exactly like a physical
+     die face, not a font glyph. Unicode die-face characters (U+2680-2685)
+     depend entirely on font support and render as barely-visible or
+     generic boxes on plenty of real systems -- this can't fail to render
+     the same way everywhere, since it's plain divs, not a character. */
+  .die-face {
+    display: inline-grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    width: 34px;
+    height: 34px;
+    background: #f2eee2;
+    border: 2px solid #1a1428;
+    border-radius: 7px;
+    padding: 4px;
+    gap: 2px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.45);
+    flex-shrink: 0;
+  }
+  .die-face .pip { border-radius: 50%; background: #1a1428; align-self: center; justify-self: center; width: 70%; height: 70%; }
+  .die-face.hidden-die {
+    background: linear-gradient(145deg, #3a2c56, #1e1533);
+    border-color: var(--dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--dim);
+    font-weight: 800;
+    font-size: 1.1rem;
+  }
+  .die-face.match { border-color: var(--true); box-shadow: 0 0 10px rgba(52,199,123,0.9); }
   .seat.active-turn { border-color: var(--pulse); box-shadow: 0 0 22px rgba(88,209,255,0.55); }
   .seat.eliminated { opacity: 0.35; filter: grayscale(1); }
   .seat.eliminated .name::after { content: " \2620 OUT"; color: var(--bluff); }
@@ -137,12 +243,21 @@
   <label><input type="checkbox" id="live-toggle" checked> live Ollama (falls back to scripted)</label>
 </div>
 <div id="status"></div>
+<div id="console"></div>
 
-<div id="table-wrap">
-  <div id="table-surface"></div>
-  <div class="billboard" id="billboard">
-    <span class="round-label">round -</span>
-    <span class="bid-value" id="billboard-value">waiting...</span>
+<div class="board-row">
+  <div id="table-wrap">
+    <div class="curtain-panel left" id="curtain-left"></div>
+    <div class="curtain-panel right" id="curtain-right"></div>
+    <div id="table-surface"></div>
+    <div class="billboard" id="billboard">
+      <span class="round-label">round -</span>
+      <span class="bid-value" id="billboard-value">waiting...</span>
+    </div>
+  </div>
+  <div id="roster-panel">
+    <div class="roster-title">Table</div>
+    <div id="roster-rows"></div>
   </div>
 </div>
 
@@ -150,6 +265,8 @@
 <div class="winner-banner" id="winner-banner"></div>
 
 <footer style="text-align:center; margin-top:32px; font-size:0.8rem;">
+  <a href="stats.html" style="color:var(--dim); text-decoration:none;">Standings</a>
+  &middot;
   <a href="about.html" target="_blank" rel="noopener noreferrer" style="color:var(--dim); text-decoration:none;">About</a>
 </footer>
 
@@ -161,11 +278,67 @@ const AVATAR = {
   "The Long-Haul Trucker": "\u{1F69A}", "The Immigrant Shop Owner": "\u{1F3EA}",
   "The Gig Worker": "\u{1F4F1}",
 };
-const DIE_GLYPH = ["", "⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
+// 3x3 grid positions (row-major, 0-8) that hold a pip for each face --
+// the standard physical-die pip layout.
+const PIP_PATTERNS = {
+  1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8],
+};
+
+function dieFaceHTML(value, matchFace) {
+  if (value == null) return `<div class="die-face hidden-die">?</div>`;
+  const pips = PIP_PATTERNS[value] || [];
+  const cells = Array.from({ length: 9 }, (_, i) => pips.includes(i) ? `<div class="pip"></div>` : `<div></div>`).join("");
+  const isMatch = matchFace != null && (value === matchFace || (matchFace !== 1 && value === 1));
+  return `<div class="die-face${isMatch ? " match" : ""}">${cells}</div>`;
+}
 
 const $ = (id) => document.getElementById(id);
 let current = null;
-let diceCounts = [];
+
+// ---- roster panel: player/model/online badges beside the board,
+// replacing the old single long status string. modelRoster is keyed by
+// model tag -> {online, display_name}, refreshed periodically since
+// whether Ollama is up/down or a model is installed can change while the
+// page stays open (same reasoning as Dominion's own roster panel).
+let modelRoster = {};
+
+async function pollModelRoster() {
+  try {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+    modelRoster = {};
+    for (const m of data.models) modelRoster[m.tag] = m;
+  } catch (e) {
+    // Server unreachable or mid-restart -- keep whatever roster data we
+    // already had rather than blanking the panel over a transient blip.
+  }
+  renderRosterPanel();
+}
+setInterval(pollModelRoster, 5000);
+pollModelRoster();
+
+function renderRosterPanel() {
+  if (!current) return;
+  const rows = current.personas.map((p, i) => {
+    const modelTag = current.models[i];
+    let dotClass = "offline", label = "scripted";
+    if (modelTag) {
+      const info = modelRoster[modelTag];
+      const online = info ? info.online : false;
+      dotClass = online ? "online" : "offline";
+      label = (info && info.display_name) || modelTag;
+    }
+    return `<div class="roster-row">
+      <span class="roster-dot ${dotClass}"></span>
+      <div class="roster-info">
+        <div class="roster-name">${p.archetype_name}</div>
+        <div class="roster-model">${label}</div>
+      </div>
+    </div>`;
+  }).join("");
+  $("roster-rows").innerHTML = rows;
+  $("roster-panel").classList.add("visible");
+}
 
 // ---- sound: synthesized tones via Web Audio API, no audio files needed.
 let audioCtx = null;
@@ -192,6 +365,9 @@ function sfxExecuted() { tone(110, 0, 0.5, "square", 0.18); tone(90, 0.15, 0.5, 
 function sfxTrue() { tone(523, 0, 0.15, "sine", 0.15); tone(659, 0.1, 0.2, "sine", 0.16); }
 function sfxBluff() { tone(220, 0, 0.2, "sawtooth", 0.18); tone(196, 0.15, 0.35, "sawtooth", 0.18); }
 function sfxWinner() { tone(523, 0, 0.15, "sine", 0.15); tone(659, 0.12, 0.15, "sine", 0.15); tone(784, 0.24, 0.4, "sine", 0.2); }
+function sfxSpotOnHit() { tone(784, 0, 0.1, "sine", 0.2); tone(988, 0.08, 0.1, "sine", 0.2); tone(1175, 0.16, 0.25, "sine", 0.22); }
+function sfxSpotOnMiss() { tone(300, 0, 0.15, "square", 0.16); tone(220, 0.1, 0.3, "square", 0.15); }
+function sfxPalafox() { tone(80, 0, 0.6, "sawtooth", 0.16); tone(83, 0.05, 0.6, "sawtooth", 0.1); }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -199,10 +375,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // minimum of (players-1) * HAND_SIZE lost rounds before one winner
 // remains (engine/liars_dice.py's HAND_SIZE=3), so with 5 players that's
 // at least 12 rounds no matter how fast any single beat animates. These
-// values are picked to keep a full run watchable in well under a minute
-// even at that floor -- Scott's rule: "needs to go fast enough for
-// people to enjoy."
+// are floors, not fixed waits: in live mode the real Ollama round-trip
+// already took real time server-side before its event ever reached the
+// browser, so the consumer loop below rarely has to wait this long in
+// practice -- it only kicks in when events arrive faster than a human
+// could read them (the common case in scripted mode, and the reason
+// events queue up instead of rendering instantly the moment they arrive).
 const PACE = {
+  preflight: 120,
   roundStart: 150,
   turn: 180,
   execution: 200,
@@ -210,6 +390,38 @@ const PACE = {
   verdictPause: 500,
   postRound: 150,
 };
+
+function consoleLine(text) {
+  const box = $("console");
+  const div = document.createElement("div");
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+// Decouples "how fast events arrive" from "how fast they're displayed."
+// The stream reader pushes into this as fast as the network/server
+// delivers (instantly, in scripted mode; paced by real model latency in
+// live mode); a separate consumer drains it at its own pace (see PACE
+// above), so live mode's real wait becomes visible AS it happens instead
+// of the browser sitting on a blank screen until the whole tournament is
+// already over.
+class EventQueue {
+  constructor() { this.items = []; this.resolvers = []; this.done = false; }
+  push(item) {
+    if (this.resolvers.length) this.resolvers.shift()(item);
+    else this.items.push(item);
+  }
+  finish() {
+    this.done = true;
+    while (this.resolvers.length) this.resolvers.shift()(null);
+  }
+  async next() {
+    if (this.items.length) return this.items.shift();
+    if (this.done) return null;
+    return new Promise((resolve) => this.resolvers.push(resolve));
+  }
+}
 
 function layoutSeats(n) {
   const wrap = $("table-wrap");
@@ -232,30 +444,25 @@ function seatHTML(i, persona, model) {
     ? `<span class="model-badge live">\u{1F916} ${model}</span>`
     : `<span class="model-badge">\u{1F4DC} scripted</span>`;
   return `
-    <div class="avatar">${avatar}</div>
+    <div class="avatar">${avatar}<span class="thinking-badge">\u{1F914}</span></div>
     ${badge}
     <div class="name">${persona.archetype_name}</div>
     <div class="dice-row" id="dice-${i}"></div>
   `;
 }
 
-function renderHiddenDice(i) {
-  const row = $("dice-" + i);
-  row.innerHTML = Array.from({ length: diceCounts[i] })
-    .map(() => `<span class="die hidden">?</span>`).join("");
-}
-
 function renderRevealedDice(i, hand, matchFace) {
   const row = $("dice-" + i);
-  row.innerHTML = hand.map((d) => {
-    const isMatch = matchFace != null && (d === matchFace || (matchFace !== 1 && d === 1));
-    return `<span class="die${isMatch ? " match" : ""}">${DIE_GLYPH[d]}</span>`;
-  }).join("");
+  row.innerHTML = hand.map((d) => dieFaceHTML(d, matchFace)).join("");
 }
 
 function setActiveSeat(i) {
   document.querySelectorAll(".seat").forEach((el) => el.classList.remove("active-turn"));
   if (i != null) $("seat-" + i).classList.add("active-turn");
+}
+
+function clearThinking() {
+  document.querySelectorAll(".seat.thinking").forEach((el) => el.classList.remove("thinking"));
 }
 
 function logLine(html, cls) {
@@ -267,124 +474,223 @@ function logLine(html, cls) {
   log.scrollTop = log.scrollHeight;
 }
 
-async function playTournament() {
-  const n = current.personas.length;
-  diceCounts = new Array(n).fill(3); // HAND_SIZE -- see engine/liars_dice.py
+let roundNum = 0;
 
-  const surface = $("table-surface");
-  const table = $("table-wrap");
-  let seatsHTML = "";
-  for (let i = 0; i < n; i++) {
-    seatsHTML += `<div class="seat" id="seat-${i}">${seatHTML(i, current.personas[i], current.models[i])}</div>`;
-  }
-  table.insertAdjacentHTML("beforeend", seatsHTML);
-  table.style.display = "block";
-  $("round-log").style.display = "block";
-  layoutSeats(n);
-  for (let i = 0; i < n; i++) renderHiddenDice(i);
+// One handler per real event kind streamed from the server, in the exact
+// order they actually happened -- board state (billboard, active seat,
+// dice) reacts to every raw event regardless of how routine it is; the
+// round-log ticker only ever gets fed by "highlight" events, the curated
+// subset engine/tournament_watchers.py's HighlightWatcher decided was
+// worth narrating. That split is deliberate, not an oversight: the board
+// must reflect everything live, the same "board updates regardless of
+// the filter" rule from the design conversation.
+async function handleStreamEvent(ev) {
+  switch (ev.kind) {
+    case "preflight":
+      consoleLine(ev.text);
+      await sleep(PACE.preflight);
+      break;
 
-  await sleep(200);
-
-  for (let r = 0; r < current.rounds.length; r++) {
-    const round = current.rounds[r];
-    const aliveNow = diceCounts.map((c, i) => c > 0 ? i : -1).filter((i) => i >= 0);
-    logLine(`ROUND ${r + 1} -- dice re-rolled (${aliveNow.length} players in)`, "banner");
-    $("billboard").querySelector(".round-label").textContent = `round ${r + 1}`;
-    $("billboard-value").textContent = "opening...";
-    aliveNow.forEach((i) => renderHiddenDice(i));
-    await sleep(PACE.roundStart);
-
-    for (const turn of round.turns_log) {
-      setActiveSeat(turn.player_index);
-      const name = current.personas[turn.player_index].archetype_name;
-      if (turn.move === "raise") {
-        sfxRaise();
-        $("billboard-value").textContent = `≥ ${turn.bid.quantity} showing ${turn.bid.face}`;
-        logLine(`<b>${name}</b> raises: at least ${turn.bid.quantity} showing ${turn.bid.face} <span style="color:var(--dim)">(${turn.reason})</span>`);
-      } else {
-        sfxCall();
-        logLine(`<b>${name}</b> CALLS! <span style="color:var(--dim)">(${turn.reason})</span>`);
+    case "table_ready": {
+      current = ev;
+      const n = current.personas.length;
+      let seatsHTML = "";
+      for (let i = 0; i < n; i++) {
+        seatsHTML += `<div class="seat" id="seat-${i}">${seatHTML(i, current.personas[i], current.models[i])}</div>`;
       }
-      // Deliberately snappy -- the server already fully computed every
-      // round (including any live Ollama round-trips) before this
-      // response ever arrived, so how fast playback animates here is a
-      // pure UX choice, not gated by real model latency. Scott's rule
-      // applies to this too: "needs to go fast enough for people to enjoy."
-      await sleep(PACE.turn);
+      $("table-wrap").insertAdjacentHTML("beforeend", seatsHTML);
+      $("table-wrap").style.display = "block";
+      $("round-log").style.display = "block";
+      layoutSeats(n);
+      // No dice to show yet -- the first round_start (moments away) is
+      // what actually rolls and reveals every real hand. Dice rows start
+      // empty rather than with placeholder "?" faces.
+      // Per-seat model assignments now live in the roster panel beside the
+      // board, not crammed into one long status string here.
+      $("status").textContent = current.live
+        ? "Live tournament -- watch the roster panel for each seat's model."
+        : (current.live_requested ? "Ollama not reachable -- ran scripted instead." : "");
+      renderRosterPanel();
+      // The table assembles fully BEHIND the curtain, then it wipes open --
+      // Scott's ask: "screen wipe/curtain, then board assembly" reads best
+      // as the reveal happening once, not the seats popping in over top of
+      // an already-open table.
+      await sleep(300);
+      $("curtain-left").classList.add("open");
+      $("curtain-right").classList.add("open");
+      await sleep(900);
+      break;
     }
 
-    if (round.executed_index != null) {
-      setActiveSeat(round.executed_index);
-      sfxExecuted();
-      const name = current.personas[round.executed_index].archetype_name;
-      logLine(`<b>${name}</b> FROZE -- EXECUTED for hesitating.`, "verdict-bluff");
-      await sleep(PACE.execution);
-    } else {
-      // Reveal every alive hand, highlighting dice matching the bid's face.
+    case "round_start":
+      roundNum++;
+      // Real dice, visible the instant they're rolled -- not hidden behind
+      // "?" until a reveal. Scott: "I'd rather we see them all the time;
+      // before, during, and after each roll... I need to see the choices
+      // and bluffs more visually." No matchFace yet -- there's no bid to
+      // highlight against until the first raise lands.
+      for (const idxStr of Object.keys(ev.hands)) {
+        renderRevealedDice(Number(idxStr), ev.hands[idxStr], null);
+      }
+      // Palafox: no wild ones for anyone this round, forced opening from
+      // whoever's down to their last die -- the round-label itself flags
+      // it so the human sees the rule change before the first bid lands,
+      // not just after the fact in the round-log.
+      $("billboard").querySelector(".round-label").textContent =
+        ev.is_palafox ? `round ${roundNum} · PALAFOX -- no wild ones` : `round ${roundNum}`;
+      $("billboard").classList.toggle("palafox", !!ev.is_palafox);
+      if (ev.is_palafox) sfxPalafox();
+      $("billboard-value").textContent = "opening...";
+      await sleep(PACE.roundStart);
+      break;
+
+    case "player_thinking":
+      // Only meaningful for a seat with a live model assigned -- a
+      // scripted negotiator resolves instantly, so the badge would flash
+      // for a single frame at most either way, but skipping it for
+      // scripted seats keeps the board from flickering needlessly.
+      if (current.live && current.models[ev.player_index]) {
+        $("seat-" + ev.player_index).classList.add("thinking");
+      }
+      break;
+
+    case "round_raise":
+      clearThinking();
+      setActiveSeat(ev.player_index);
+      sfxRaise();
+      $("billboard-value").textContent = `≥ ${ev.bid.quantity} showing ${ev.bid.face}`;
+      await sleep(PACE.turn);
+      break;
+
+    case "round_call": {
+      clearThinking();
       setActiveSeat(null);
       $("billboard-value").textContent = "REVEALING...";
       await sleep(PACE.preReveal);
-      for (const idxStr of Object.keys(round.hands)) {
-        renderRevealedDice(Number(idxStr), round.hands[idxStr], round.bid.face);
+      for (const idxStr of Object.keys(ev.hands)) {
+        renderRevealedDice(Number(idxStr), ev.hands[idxStr], ev.bid.face);
       }
       const flash = $("reveal-flash");
-      flash.className = round.bid_was_true ? "true" : "bluff";
-      if (round.bid_was_true) sfxTrue(); else sfxBluff();
-      const claimantName = current.personas[round.claimant_index].archetype_name;
-      const callerName = current.personas[round.caller_index].archetype_name;
-      const verdict = round.bid_was_true ? "TRUE" : "A BLUFF";
-      logLine(`Actual count: <b>${round.actual_count}</b>. ${claimantName}'s bid was <b>${verdict}</b> -- `
-        + `${callerName} called it.`, round.bid_was_true ? "verdict-true" : "verdict-bluff");
+      flash.className = ev.bid_was_true ? "true" : "bluff";
+      if (ev.bid_was_true) sfxTrue(); else sfxBluff();
       await sleep(PACE.verdictPause);
-      for (let i = 0; i < n; i++) if (diceCounts[i] > 0) renderHiddenDice(i);
+      // If the bid was true, the CALLER wrongly doubted an honest claim
+      // and loses; if it was a bluff, the CLAIMANT got caught and loses --
+      // matches the fix in engine/liars_dice.py exactly (that logic was
+      // previously inverted there before tonight's bug fix). No dice-count
+      // bookkeeping needed here anymore -- the next round_start reveals
+      // the real (now smaller) hand straight from the server.
+      await sleep(PACE.postRound);
+      break;
     }
 
-    diceCounts[round.loser_index] -= 1;
-    if (diceCounts[round.loser_index] <= 0) {
-      $("seat-" + round.loser_index).classList.add("eliminated");
-      logLine(`<b>${current.personas[round.loser_index].archetype_name}</b> is OUT.`, "verdict-bluff");
+    case "round_spot_on": {
+      // Highest-stakes reveal in the game -- right or wrong, it's the same
+      // hand-reveal choreography as a normal call, but the dice swing goes
+      // one direction only on a hit (claimant loses, caller gains -- see
+      // engine/liars_dice.py's run_round) instead of the usual single loser.
+      clearThinking();
+      setActiveSeat(null);
+      $("billboard-value").textContent = "SPOT ON CALL...";
+      await sleep(PACE.preReveal);
+      for (const idxStr of Object.keys(ev.hands)) {
+        renderRevealedDice(Number(idxStr), ev.hands[idxStr], ev.bid.face);
+      }
+      const flash = $("reveal-flash");
+      flash.className = ev.spot_on_correct ? "spoton-hit" : "spoton-miss";
+      if (ev.spot_on_correct) sfxSpotOnHit(); else sfxSpotOnMiss();
+      await sleep(PACE.verdictPause);
+      // No dice-count bookkeeping needed -- same as round_call, the next
+      // round_start reveals the real count straight from the server,
+      // including the caller's die back on a successful Spot On.
+      await sleep(PACE.postRound);
+      break;
     }
-    await sleep(PACE.postRound);
+
+    case "round_execution":
+      clearThinking();
+      setActiveSeat(ev.player_index);
+      sfxExecuted();
+      await sleep(PACE.execution);
+      await sleep(PACE.postRound);
+      break;
+
+    case "player_eliminated":
+      // The authoritative elimination signal -- fires once dice actually
+      // hit zero, after whichever round_call/round_execution caused it.
+      // Clears their dice row so a dimmed, eliminated seat doesn't keep
+      // showing a "ghost" hand from the round that finished them off.
+      $("seat-" + ev.player_index).classList.add("eliminated");
+      $("dice-" + ev.player_index).innerHTML = "";
+      break;
+
+    case "highlight": {
+      const cls = ev.level === "climax" ? "verdict-true" : (ev.level === "major" ? "verdict-bluff" : "");
+      logLine(ev.text, cls);
+      break;
+    }
+
+    case "tournament_winner":
+      setActiveSeat(null);
+      $("seat-" + ev.player_index).classList.add("winner");
+      sfxWinner();
+      $("billboard-value").textContent = "WINNER!";
+      $("winner-banner").textContent = `${current.personas[ev.player_index].archetype_name} WINS THE POT`;
+      $("winner-banner").style.display = "block";
+      break;
   }
-
-  setActiveSeat(null);
-  $("seat-" + current.winner_index).classList.add("winner");
-  sfxWinner();
-  $("billboard-value").textContent = "WINNER!";
-  $("winner-banner").textContent = `${current.personas[current.winner_index].archetype_name} WINS THE POT`;
-  $("winner-banner").style.display = "block";
-  $("start-btn").disabled = false;
 }
 
 async function startTournament() {
   $("start-btn").disabled = true;
+  $("console").innerHTML = "";
+  $("console").style.display = "block";
   $("round-log").innerHTML = "";
   $("round-log").style.display = "none";
   $("winner-banner").style.display = "none";
   $("table-wrap").style.display = "none";
+  $("curtain-left").classList.remove("open");
+  $("curtain-right").classList.remove("open");
   $("reveal-flash").className = "";
   document.querySelectorAll(".seat").forEach((el) => el.remove());
+  $("roster-panel").classList.remove("visible");
+  $("roster-rows").innerHTML = "";
+  roundNum = 0;
 
   const n = parseInt($("player-count").value, 10);
   const live = $("live-toggle").checked;
-  $("status").textContent = live ? "Rolling live -- this can take a while for a full tournament..." : "Rolling...";
+  $("status").textContent = "Connecting...";
 
-  try {
-    const resp = await fetch(`/api/run-tournament?players=${n}&live=${live ? 1 : 0}`, { method: "POST" });
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error);
-    current = data;
-  } catch (err) {
-    $("status").textContent = "Something went wrong: " + err.message;
-    $("start-btn").disabled = false;
-    return;
+  const queue = new EventQueue();
+  (async () => {
+    try {
+      const resp = await fetch(`/api/run-tournament-stream?players=${n}&live=${live ? 1 : 0}`, { method: "POST" });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (line.trim()) queue.push(JSON.parse(line));
+        }
+      }
+    } catch (err) {
+      consoleLine("Something went wrong: " + err.message);
+    }
+    queue.finish();
+  })();
+
+  while (true) {
+    const ev = await queue.next();
+    if (ev === null) break;
+    await handleStreamEvent(ev);
   }
 
-  $("status").textContent = current.live
-    ? "live: " + current.personas.map((p, i) => `${p.archetype_name} -> ${current.models[i]}`).join(", ")
-    : (current.live_requested ? "Ollama not reachable -- ran scripted instead." : "");
-
-  await playTournament();
+  $("start-btn").disabled = false;
 }
 
 window.addEventListener("resize", () => {

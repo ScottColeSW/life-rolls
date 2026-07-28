@@ -29,7 +29,8 @@ from .cases import Case
 from .personas import Persona
 from .resolve_ladder import LadderResult, LadderTimeout, run_ladder
 from .liars_dice import (
-    Bid, RoundTimeout, compute_new_face_raise, compute_opening_bid, compute_same_face_raise,
+    HAND_SIZE, WILD_FACE, Bid, RoundTimeout, compute_ace_switch_raise, compute_new_face_raise,
+    compute_opening_bid, compute_same_face_raise,
 )
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
@@ -173,26 +174,59 @@ class ScriptedNegotiator:
         return move, "Pushing the claim higher."
 
     def dice_move(self, player: Persona, hand: List[int], standing_bid: Optional[Bid],
-                  total_other_dice: int, case: Case, timeout: float = 8.0) -> Tuple[str, Optional[Bid], str]:
+                  total_other_dice: int, case: Case, timeout: float = 8.0,
+                  wild_active: bool = True) -> Tuple[str, Optional[Bid], str]:
         """Instant and deterministic -- never raises RoundTimeout, unlike
         OllamaNegotiator's override. Estimates the expected count of the
         standing bid's face across every OTHER die (an unknown quantity,
         same limit a live model faces) using the real per-die probability
         -- 1/6 for a bid on 1s, 2/6 for any other face since wild 1s also
         count -- then reasons the same way ladder_move does: temperament
-        sets the tolerance for calling versus raising further."""
+        sets the tolerance for calling versus raising further. wild_active
+        is False only during a Palafox round (run_round decides this, not
+        the negotiator) -- 1s stop being wild for everyone that round, so
+        every wild-dependent estimate and the Ace-Switch option itself are
+        both switched off rather than reasoning about a rule that isn't in
+        effect. This method is never actually asked to open during a
+        Palafox round (run_round forces that specific bid itself), so
+        standing_bid is None only ever happens in an ordinary round."""
         if standing_bid is None:
             return "raise", compute_opening_bid(hand), "Opening on what I'm actually holding."
         counts = Counter(hand)
-        wilds = counts.get(1, 0)
+        wilds = counts.get(1, 0) if wild_active else 0
         my_have = counts.get(standing_bid.face, 0) + (wilds if standing_bid.face != 1 else 0)
-        per_die_prob = (1 / 6) if standing_bid.face == 1 else (2 / 6)
+        per_die_prob = (1 / 6) if standing_bid.face == 1 else ((2 / 6) if wild_active else (1 / 6))
         expected_total = my_have + total_other_dice * per_die_prob
+        # Spot On is a much riskier, higher-reward bet than a plain call
+        # -- right or wrong, it's exact-match-only, so it's only worth
+        # considering when the expected count sits almost exactly on the
+        # bid itself (a tight gap, tighter than the plain call tolerance
+        # below), and only when there's an actual die to win back -- a
+        # player already at full strength has nothing to gain from the
+        # extra risk over just calling normally.
+        gap = abs(standing_bid.quantity - expected_total)
+        if gap < 0.75 and len(hand) < HAND_SIZE and self.rng.random() < (0.15 + 0.25 * player.risk_tolerance):
+            return "spot_on", None, "That's exactly right. I'm calling it dead on."
         tolerance = 1.0 + 2.0 * player.trust_propensity
         if standing_bid.quantity > expected_total + tolerance:
             return "call", None, "That count doesn't add up. I don't believe it."
+        # Ace-Switch: only worth proposing when wilds are actually active
+        # (during a Palafox round, face 1 is just an ordinary face -- there
+        # is no doubling advantage to switch onto), when NOT already on
+        # aces (there's nothing to switch to), and only when this player's
+        # own wilds plus the expected wilds among every other die comfortably
+        # cover the halved quantity the switch would require -- otherwise
+        # it's just handing the table a bid that looks strong but isn't
+        # backed by anything real, a worse bluff than a normal raise would be.
+        if wild_active and standing_bid.face != WILD_FACE:
+            ace_bid = compute_ace_switch_raise(standing_bid)
+            expected_wilds_total = wilds + total_other_dice * (1 / 6)
+            if (expected_wilds_total >= ace_bid.quantity - 0.5
+                    and self.rng.random() < (0.10 + 0.20 * player.risk_tolerance)):
+                return "raise", ace_bid, "Switching this bid onto Aces."
         if self.rng.random() < player.risk_tolerance:
-            return "raise", compute_new_face_raise(hand, standing_bid), "Switching it up -- pushing my own hand."
+            return ("raise", compute_new_face_raise(hand, standing_bid, wild_active=wild_active),
+                    "Switching it up -- pushing my own hand.")
         return "raise", compute_same_face_raise(standing_bid), "Pushing the same bid higher."
 
 
@@ -333,7 +367,8 @@ class OllamaNegotiator(ScriptedNegotiator):
         raise LadderTimeout()
 
     def dice_move(self, player: Persona, hand: List[int], standing_bid: Optional[Bid],
-                  total_other_dice: int, case: Case, timeout: float = 8.0) -> Tuple[str, Optional[Bid], str]:
+                  total_other_dice: int, case: Case, timeout: float = 8.0,
+                  wild_active: bool = True) -> Tuple[str, Optional[Bid], str]:
         """Deliberately does NOT fall back to super().dice_move() on
         failure -- see liars_dice.py's module docstring. A timeout,
         connection error, or unparseable reply all raise RoundTimeout,
@@ -341,7 +376,12 @@ class OllamaNegotiator(ScriptedNegotiator):
         The model is asked ONLY for a qualitative move (RAISE_SAME /
         RAISE_NEW / CALL); the actual resulting bid is always computed by
         this project's own liars_dice.py helpers, never stated by the
-        model itself -- see probe_counting.py for why."""
+        model itself -- see probe_counting.py for why. wild_active is False
+        only during a Palafox round; run_round never actually calls this
+        method to open in that case (the opening bid is forced), so the
+        standing_bid is None branch below is unreachable when wild_active
+        is False, but the parameter still has to exist here since every
+        call site passes it uniformly."""
         hand_desc = ", ".join(str(d) for d in sorted(hand))
         if standing_bid is None:
             prompt = (
@@ -356,24 +396,49 @@ class OllamaNegotiator(ScriptedNegotiator):
                 raise RoundTimeout()
             return "raise", compute_opening_bid(hand), reply.strip()
 
+        # SPOT_ON is only ever offered when there's an actual die to win
+        # back (len(hand) < HAND_SIZE, same gate ScriptedNegotiator uses --
+        # a live model at full strength has no reason to be tempted by the
+        # exact-match risk over a plain CALL). RAISE_ACE is only offered
+        # when wilds are actually active (never during a Palafox round --
+        # face 1 isn't special there, there's no halving advantage) and the
+        # standing bid ISN'T already on aces (there's nothing to switch to
+        # otherwise -- staying on aces is just RAISE_SAME).
+        offer_spot_on = len(hand) < HAND_SIZE
+        offer_ace_switch = wild_active and standing_bid.face != WILD_FACE
+        wild_desc = "1s are wild, count as any face" if wild_active else "1s are NOT wild this round -- they only count as 1s"
+        options = ["RAISE_SAME (bid more of the same face)", "RAISE_NEW (switch to a different face)"]
+        if offer_ace_switch:
+            options.append("RAISE_ACE (switch the bid onto 1s -- Wild Aces are worth roughly double "
+                            "an ordinary face, so you only need about half as many to make an equally "
+                            "strong bid)")
+        options.append("CALL")
+        if offer_spot_on:
+            options.append("SPOT_ON (stake your whole call on the count being EXACTLY right -- win a "
+                            "lost die back if you're exactly right, but it costs you just the same as "
+                            "a wrong CALL if you're off by even one)")
+        options_line = ", ".join(options[:-1]) + f", or {options[-1]}."
         prompt = (
             f"You are {player.archetype_name}. {player.mandate}\n"
             f"Liar's Dice round over {case.pot_label}. Your hand: [{hand_desc}] "
-            f"(1s are wild, count as any face). There are {total_other_dice} other "
+            f"({wild_desc}). There are {total_other_dice} other "
             f"hidden dice in play you can't see.\n"
             f"Current bid on the table: at least {standing_bid.quantity} dice showing "
             f"{standing_bid.face}.\nDo you believe it? Reply with ONLY one word: "
-            f"RAISE_SAME (bid more of the same face), RAISE_NEW (switch to a different "
-            f"face), or CALL."
+            f"{options_line}"
         )
         reply = _ask_ollama(self.model, prompt, timeout=timeout, num_predict=10)
         if not reply:
             raise RoundTimeout()
         upper = reply.strip().upper()
+        if offer_spot_on and ("SPOT_ON" in upper or "SPOT ON" in upper):
+            return "spot_on", None, reply.strip()
+        if offer_ace_switch and ("RAISE_ACE" in upper or "ACE" in upper):
+            return "raise", compute_ace_switch_raise(standing_bid), reply.strip()
         if "CALL" in upper:
             return "call", None, reply.strip()
         if "RAISE_NEW" in upper or "NEW" in upper:
-            return "raise", compute_new_face_raise(hand, standing_bid), reply.strip()
+            return "raise", compute_new_face_raise(hand, standing_bid, wild_active=wild_active), reply.strip()
         if "RAISE_SAME" in upper or "RAISE" in upper:
             return "raise", compute_same_face_raise(standing_bid), reply.strip()
         raise RoundTimeout()
