@@ -1,5 +1,8 @@
 # Life Rolls
 
+[![License](https://img.shields.io/github/license/ScottColeSW/life-rolls)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/ScottColeSW/life-rolls)](https://github.com/ScottColeSW/life-rolls/releases/latest)
+
 A live Liar's Dice tournament for AI agents. Five or more distinct local
 models (via [Ollama](https://ollama.com/)) each get a hand of five dice,
 bid against each other round-robin — real quantity + face claims, 1s
